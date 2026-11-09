@@ -14,7 +14,8 @@ import contextlib
 import contextvars
 import time
 import uuid
-from typing import Any, Callable, Iterator
+from collections.abc import Callable, Iterator
+from typing import Any
 
 import httpx
 
@@ -193,7 +194,7 @@ class AgentGuard:
     def close(self) -> None:
         self._client.close()
 
-    def __enter__(self) -> "AgentGuard":
+    def __enter__(self) -> AgentGuard:
         return self
 
     def __exit__(self, *exc: Any) -> None:
@@ -201,38 +202,57 @@ class AgentGuard:
 
 
 class AgentGuardAdmin:
-    """Thin operator client (used by the CLI and demo)."""
+    """Operator client. Authenticate with an API token (agt_...) for automation, or
+    with a user session via `AgentGuardAdmin.login(...)`. Only user sessions can approve."""
 
-    def __init__(self, base_url: str, admin_token: str, timeout: float = 30.0, client: httpx.Client | None = None):
+    def __init__(self, base_url: str, token: str, timeout: float = 30.0, client: httpx.Client | None = None):
         self._client = client or httpx.Client(base_url=base_url.rstrip("/"), timeout=timeout)
-        self._headers = {"Authorization": f"Bearer {admin_token}"}
+        self._headers = {"Authorization": f"Bearer {token}"}
+
+    @classmethod
+    def login(cls, base_url: str, email: str, password: str, client: httpx.Client | None = None) -> AgentGuardAdmin:
+        c = client or httpx.Client(base_url=base_url.rstrip("/"), timeout=30.0)
+        resp = c.post("/v1/auth/login", json={"email": email, "password": password})
+        if resp.status_code >= 400:
+            raise AgentGuardError(f"login failed: HTTP {resp.status_code}")
+        return cls(base_url, resp.json()["token"], client=c)
 
     def _call(self, method: str, path: str, **kwargs: Any) -> Any:
         resp = self._client.request(method, path, headers=self._headers, **kwargs)
         if resp.status_code >= 400:
-            raise AgentGuardError(f"HTTP {resp.status_code}: {resp.text}")
-        return resp.json()
+            try:
+                detail = resp.json().get("detail", resp.text)
+            except ValueError:
+                detail = resp.text
+            raise AgentGuardError(f"HTTP {resp.status_code}: {detail}")
+        return resp.json() if resp.content else None
 
-    def create_agent(self, agent_id: str, name: str = "", owner: str = "", description: str = "") -> dict:
-        return self._call("POST", "/v1/admin/agents", json={"id": agent_id, "name": name, "owner": owner, "description": description})
+    def create_agent(self, slug: str, name: str = "", owner: str = "", description: str = "", environment: str = "production") -> dict:
+        return self._call("POST", "/v1/admin/agents", json={"slug": slug, "name": name, "owner": owner, "description": description, "environment": environment})
 
     def approvals(self) -> list[dict]:
         return self._call("GET", "/v1/admin/approvals")
 
-    def approve(self, request_id: str, reviewer: str, note: str = "") -> dict:
-        return self._call("POST", f"/v1/admin/approvals/{request_id}/approve", json={"reviewer": reviewer, "note": note})
+    def approve(self, request_id: str, note: str = "") -> dict:
+        return self._call("POST", f"/v1/admin/approvals/{request_id}", json={"decision": "approve", "note": note})
 
-    def deny(self, request_id: str, reviewer: str, note: str = "") -> dict:
-        return self._call("POST", f"/v1/admin/approvals/{request_id}/deny", json={"reviewer": reviewer, "note": note})
+    def deny(self, request_id: str, note: str = "") -> dict:
+        return self._call("POST", f"/v1/admin/approvals/{request_id}", json={"decision": "deny", "note": note})
 
-    def pause(self, agent_id: str, reason: str = "") -> dict:
-        return self._call("POST", f"/v1/admin/agents/{agent_id}/pause", json={"reason": reason})
+    def pause(self, agent: str, reason: str = "") -> dict:
+        return self._call("POST", f"/v1/admin/agents/{agent}/pause", json={"reason": reason})
 
-    def resume(self, agent_id: str) -> dict:
-        return self._call("POST", f"/v1/admin/agents/{agent_id}/resume")
+    def resume(self, agent: str) -> dict:
+        return self._call("POST", f"/v1/admin/agents/{agent}/resume")
+
+    def put_secret(self, name: str, value: str) -> dict:
+        return self._call("PUT", f"/v1/admin/secrets/{name}", json={"value": value})
+
+    def publish_policy(self, source: str, comment: str = "", activate: bool = True) -> dict:
+        return self._call("POST", "/v1/admin/policies", json={"source": source, "comment": comment, "activate": activate})
 
     def verify_audit(self) -> dict:
         return self._call("GET", "/v1/admin/audit/verify")
 
-    def simulate(self, agent_id: str, action: str, params: dict) -> dict:
-        return self._call("POST", "/v1/admin/policies/simulate", json={"agent_id": agent_id, "action": action, "params": params})
+    def simulate(self, agent: str, action: str, params: dict) -> dict:
+        return self._call("POST", "/v1/admin/policies/simulate", json={"agent": agent, "action": action, "params": params})

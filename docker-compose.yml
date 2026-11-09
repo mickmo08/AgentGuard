@@ -1,0 +1,36 @@
+# Local production-like stack: AgentGuard + Postgres.
+#
+#   cp .env.example .env            # then set AGENTGUARD_ENCRYPTION_KEYS (agentguard gen-key) and POSTGRES_PASSWORD
+#   docker compose up -d
+#   docker compose exec agentguard agentguard bootstrap --org "Acme" --email you@acme.com
+#   open http://localhost:8080
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: agentguard
+      POSTGRES_USER: agentguard
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentguard -d agentguard"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  agentguard:
+    build: .
+    image: agentguard:0.2.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      AGENTGUARD_DATABASE_URL: postgresql+psycopg://agentguard:${POSTGRES_PASSWORD}@postgres:5432/agentguard
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

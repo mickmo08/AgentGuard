@@ -86,3 +86,28 @@ def test_unknown_operator_rejected():
 def test_duplicate_ids_rejected():
     with pytest.raises(ValueError):
         engine(rules=[{"id": "r", "decision": "allow"}, {"id": "r", "decision": "block"}])
+
+
+def test_review_rules_combine_strictly():
+    e = engine(rules=[
+        {"id": "a", "action": "x", "decision": "review", "approvals": {"min": 1, "roles": ["owner", "admin", "approver"]}},
+        {"id": "b", "action": "x", "decision": "review", "approvals": {"min": 2, "roles": ["owner", "admin"]}},
+    ])
+    r = e.evaluate("agent", "x", {})
+    assert r.decision == "review" and r.approvals.min == 2 and r.approvals.roles == ["owner", "admin"]
+
+
+def test_disjoint_approver_roles_fall_back_to_owner():
+    e = engine(rules=[
+        {"id": "a", "action": "x", "decision": "review", "approvals": {"roles": ["approver"]}},
+        {"id": "b", "action": "x", "decision": "review", "approvals": {"roles": ["admin"]}},
+    ])
+    assert e.evaluate("agent", "x", {}).approvals.roles == ["owner"]
+
+
+def test_unknown_policy_keys_are_errors():
+    from agentguard.server.config import PolicyError, parse_policy
+
+    with pytest.raises(PolicyError) as exc:
+        parse_policy("policies:\n  rules:\n    - id: r\n      decision: allow\n      wen: {amount: {lt: 5}}\n")
+    assert any("wen" in e for e in exc.value.errors)

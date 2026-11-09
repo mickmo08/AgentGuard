@@ -1,156 +1,135 @@
 # AgentGuard
 
-**An action gateway for AI agents.** Agents never hold the credentials for your payment, CRM or email systems. They ask AgentGuard to perform an action. AgentGuard checks it against policy, then executes it, routes it to a human for approval, or blocks it, and records every step in a tamper-evident audit log.
+**The action gateway for AI agents.** Your agents never hold the keys to Stripe, your CRM or your email provider. They ask AgentGuard to act. AgentGuard checks every request against your policy, then runs it, routes it to the right people for approval, or blocks it, and writes every step to a tamper-evident audit log.
 
 ```
-  AI agent ──(agent key only)──► AgentGuard ──(real credentials)──► Stripe / CRM / email / internal APIs
-                                    │
-                    policy: allow · review · block
-                    approvals · rate limits · kill switch
-                    hash-chained audit log
+  AI agents ──(agent key only)──► AgentGuard ──(credentials it holds)──► Stripe · CRM · email · internal APIs
+  (SDK, MCP, HTTP)                    │
+                       policy-as-code: allow · review · block
+                       approvals in the dashboard or Slack · two-person rule
+                       rate limits + kill switch · encrypted secrets
+                       hash-chained audit log · webhooks · metrics
 ```
 
-The point: **an SDK that only logs is advisory.** Enforcement is real only when the agent can't reach the downstream system without going through the gateway. That's why AgentGuard brokers the credentials.
+Logging what an agent did is advisory; enforcement is real only when the agent **cannot** reach the downstream system except through the gateway. That is the design center of AgentGuard.
 
-## What's in v0.1
+## Features
 
-| Capability | How it works |
-|---|---|
-| **Credential brokering** | Connectors read secrets from the gateway's environment. Agents authenticate with their own scoped AgentGuard key and never see downstream credentials. |
-| **Policy-as-code** | YAML rules match on agent (glob), action (glob) and param conditions (`lt`, `lte`, `gt`, `gte`, `eq`, `ne`, `in`, `not_in`, `regex`, `contains`, `exists`). **The most restrictive match wins**, so rule order can't weaken a decision. The default is `block`. |
-| **Strict input validation** | Every action has a typed param schema. Wrong types, missing fields and unknown params are rejected, so `"amount": "10"` can't slip past an `amount <= 50` rule. |
-| **Human approvals** | `review` decisions queue for a reviewer in the dashboard. Approval runs the action once. Concurrent double-approvals are rejected. Approvals expire after a TTL. Paused agents can't have actions approved. |
-| **Rate limits + kill switch** | Per-agent sliding-window limits. `pause_agent: true` auto-pauses a looping agent, which blocks all of its actions until a human resumes it. |
-| **Idempotency** | Requests carry an idempotency key. Retrying returns the original outcome instead of refunding twice, and the key is passed downstream (`Idempotency-Key` header). |
-| **Tamper-evident audit** | Every transition (requested, evaluated, approved, executed, failed) is an append-only event chained by SHA-256. `GET /v1/admin/audit/verify` detects any edit or deletion. Configured sensitive params are redacted. |
-| **Dashboard** | Approval queue, action list with per-action timelines, agents with pause/resume, audit verification and a policy simulator. All agent-supplied text is escaped, so a compromised agent can't inject script into a reviewer's browser. |
-| **Python SDK** | `guard.act()` raises typed exceptions. `guard.handler()` returns LLM-readable outcomes for agent loops. `guard.tools()` returns JSON-schema tool definitions. `guard.run()` groups a task's actions under one run id. |
+**Enforcement**
+- **Credential brokering.** Connector secrets live encrypted in each organization's secret store (write-only through the API). Agents authenticate with their own key and never see downstream credentials.
+- **Policy as code.** YAML rules match agents, actions and parameter conditions. The most restrictive matching rule wins, so rule order can never weaken a decision, and anything not explicitly allowed is blocked. Policies are immutable, numbered versions you can validate, diff, activate and roll back.
+- **Approvals that hold up.** Each rule sets how many approvers are needed and which roles may approve (e.g. two different admins for refunds over $500). Nobody can vote twice, any denial is final, approvals expire, API tokens can never approve, and a paused agent's actions cannot be approved. Approve from the dashboard or with **Approve / Deny buttons in Slack**.
+- **Kill switch.** Per-agent sliding-window rate limits can auto-pause a looping agent; operators can pause, resume, rotate keys or disable agents permanently.
+- **Strict validation.** Typed param schemas (types, enums, no unknown fields, size limits), so `"amount": "10"` can never satisfy an `amount <= 50` rule.
+- **Exactly-once intent.** Idempotency keys end to end, passed downstream (`Idempotency-Key`). Executions that never report back are marked `unknown` for a human to check rather than silently retried.
 
-## Quickstart
+**Operations**
+- **Multi-tenant.** Organizations with isolated data, policies, secrets and audit chains; users can belong to several.
+- **Roles.** owner, admin, approver, viewer; invitations; scoped API tokens for automation; session sign-out on password change; login throttling.
+- **Audit.** Every decision, vote, policy and configuration change is an event in a per-organization SHA-256 hash chain. Verification detects edits, deletions, reordering and truncation. Export as NDJSON.
+- **Notifications.** Signed webhooks (HMAC-SHA256) and Slack, delivered from a transactional outbox with retries and backoff.
+- **Encryption at rest.** Secrets, channel credentials and action params are encrypted (Fernet, with key rotation). Configured fields are redacted from views and the audit log.
+- **Runs anywhere.** One container; SQLite for trials, Postgres for production. Migrations, health/readiness probes, Prometheus metrics, JSON logs with request IDs, strict security headers and CSP.
+
+**Integrations**
+- **Python SDK** with typed outcomes and an LLM-friendly tool wrapper.
+- **MCP server**: any MCP-capable agent (Claude Desktop, Claude Code, IDE agents) gets policy-checked tools with zero code.
+- **Connectors**: Stripe (refunds, payment lookups), generic HTTP for any REST API, plus demo backends.
+
+## Quickstart (5 minutes)
 
 ```bash
-python -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"
-pytest -q
+pip install -e ".[server,mcp]"
+export AGENTGUARD_ENCRYPTION_KEYS=$(agentguard gen-key)
+agentguard db upgrade
+agentguard bootstrap --org "Acme" --email you@acme.com     # prompts for a password
+agentguard serve
 ```
 
-Run the gateway with the example support-agent policy:
+Open http://127.0.0.1:8080 and sign in. Your organization starts with a starter policy and demo connectors, so it works immediately:
 
 ```bash
-export PAYMENTS_API_KEY=sk_test_demo           # the gateway holds this, agents don't
-export AGENTGUARD_ADMIN_TOKEN=$(python -c "import secrets;print(secrets.token_urlsafe(24))")
-agentguard check --config examples/agentguard.yaml
-agentguard serve --config examples/agentguard.yaml
+python examples/support_agent_demo.py --email you@acme.com --password '...'
 ```
 
-In another terminal, play out the scenarios (auto-allowed refund, refund waiting for a manager, blocked $5,000 refund, idempotent retry, looping agent tripping the kill switch):
+That registers agents and plays out: an auto-approved $18 refund, an idempotent retry, a $240 refund waiting for one approver, a $1,200 credit that needs two different admins, a blocked $5,000 refund, and a looping agent that trips the kill switch. Approve them under **Approvals**.
 
-```bash
-python examples/support_agent_demo.py --admin-token "$AGENTGUARD_ADMIN_TOKEN"
-```
+Production deployment with Docker and Postgres: see [docs/deployment.md](docs/deployment.md).
 
-Open http://127.0.0.1:8080/, sign in with the admin token, and approve or deny the pending refund. API docs are at `/docs`.
+## Connect an agent
 
-### With a real LLM agent
-
-`examples/claude_support_agent.py` is a Claude-powered support agent. It loads its tool definitions from the gateway, and every tool call is executed by the gateway under policy:
-
-```bash
-pip install anthropic
-agentguard create-agent support-claude --config examples/agentguard.yaml   # prints an agent key
-export AGENTGUARD_KEY=ag_...
-python examples/claude_support_agent.py "I'm cus_alice and was charged twice for \$18, please fix it"
-```
-
-## Using the SDK
+**Python SDK**
 
 ```python
 from agentguard import AgentGuard, ActionBlocked, ApprovalPending
 
-guard = AgentGuard("http://127.0.0.1:8080", api_key=os.environ["AGENTGUARD_KEY"])
+guard = AgentGuard("https://agentguard.example.com", api_key=os.environ["AGENTGUARD_KEY"])
 
-with guard.run():                                   # one run id per task
-    guard.act("payments.get_customer", {"customer_id": "cus_alice"})
+with guard.run():  # groups one task's actions
     try:
-        guard.act("payments.refund",
-                  {"customer_id": "cus_alice", "amount": 240},
-                  idempotency_key="ticket-4822",    # safe to retry
-                  context={"ticket": "4822", "rationale": "cancelled annual plan"},
+        guard.act("stripe.refund",
+                  {"payment_intent": "pi_123", "amount": 240, "currency": "usd", "reason": "requested_by_customer"},
+                  idempotency_key="ticket-4822",      # safe to retry
+                  context={"ticket": "4822"},          # shown to approvers
                   wait=False)
     except ApprovalPending as p:
-        print("manager review:", p.request_id)
+        print("waiting for approval:", p.request_id)
     except ActionBlocked as b:
         print("blocked:", b.request["reason"])
 
-refund_tool = guard.handler("payments.refund")      # for LLM tool loops; never raises on policy outcomes
+refund_tool = guard.handler("stripe.refund")   # for LLM tool loops: returns outcomes instead of raising
+tools = guard.tools()                          # JSON-schema tool definitions from the active policy
 ```
+
+**MCP** (no code): `AGENTGUARD_URL=… AGENTGUARD_KEY=ag_… agentguard mcp`. For Claude Code:
+
+```bash
+claude mcp add agentguard --env AGENTGUARD_URL=https://agentguard.example.com --env AGENTGUARD_KEY=ag_... -- agentguard mcp
+```
+
+**HTTP**: `POST /v1/actions` with `Authorization: Bearer ag_…` and `{"action": "...", "params": {...}, "idempotency_key": "..."}`. Full API reference at `/docs` on your server.
 
 ## Writing policy
 
 ```yaml
+connectors:
+  stripe: {type: stripe, secret: stripe_key}     # stripe_key lives in Secrets, encrypted
+
 policies:
   default: block
   rules:
     - id: refund-small
       agents: ["support-*"]
-      action: payments.refund
-      when: {amount: {gt: 0, lte: 50}}
+      action: stripe.refund
+      when: {amount: {gt: 0, lte: 50}, currency: {eq: usd}}
       decision: allow
-    - id: refund-medium
-      action: payments.refund
-      when: {amount: {gt: 50, lte: 500}}
+    - id: refund-large
+      action: stripe.refund
+      when: {amount: {gt: 500}}
       decision: review
-      reason: Refunds over $50 require manager approval
+      reason: Large refunds need two admins
+      approvals: {min: 2, roles: [owner, admin]}
   rate_limits:
-    - id: refund-burst
-      action: payments.refund
-      max: 5
-      window_seconds: 60
-      pause_agent: true
+    - {id: refund-burst, action: stripe.refund, max: 5, window_seconds: 60, pause_agent: true}
 ```
 
-Connectors: `mock_payments` and `mock_email` (in-memory, for demos and tests), plus `http`, a generic REST connector with path templating, URL-encoded path params, injected auth header and idempotency key. See `examples/agentguard.yaml`.
+Operators: `eq ne lt lte gt gte in not_in regex contains exists`, on nested paths like `customer.tier`. Validate in CI with `agentguard check-policy policy.yaml`, publish with the API or dashboard. Reference: [docs/policies.md](docs/policies.md).
 
-## API
+## Documentation
 
-| Audience | Endpoint | |
-|---|---|---|
-| Agent | `POST /v1/actions` | submit an action; returns decision, status and result |
-| Agent | `GET /v1/actions/{id}` | poll your own action (e.g. awaiting approval) |
-| Agent | `GET /v1/tools` | JSON-schema tool definitions for every brokered action |
-| Admin | `GET/POST /v1/admin/agents`, `…/{id}/pause`, `…/resume`, `…/rotate-key` | agent registry and kill switch |
-| Admin | `GET /v1/admin/approvals`, `POST …/{id}/approve`, `…/deny` | approval queue |
-| Admin | `GET /v1/admin/actions`, `GET /v1/admin/actions/{id}` | history, with timeline |
-| Admin | `GET /v1/admin/audit`, `GET /v1/admin/audit/verify` | audit log and integrity check |
-| Admin | `GET /v1/admin/policies`, `POST /v1/admin/policies/simulate` | live policy and dry-run |
+- [Deployment](docs/deployment.md): Docker, Postgres, scaling, backups, upgrades
+- [Configuration](docs/configuration.md): every environment variable
+- [Policies](docs/policies.md): rules, approvals, rate limits, connectors
+- [Integrations](docs/integrations.md): Slack approvals, webhooks and signature verification, MCP
+- [Security](docs/security.md): threat model, guarantees and their limits
 
-## Layout
+## Development
 
-```
-agentguard/
-  server/
-    policy.py      policy engine (pure, no I/O)
-    service.py     request lifecycle: validate → decide → approve → execute → audit
-    connectors.py  credential-brokered connectors + strict param validation
-    audit.py       hash-chained audit log + redaction
-    db.py          SQLAlchemy models (SQLite dev, Postgres prod)
-    app.py         FastAPI routes
-    dashboard.html operator UI (no build step)
-  sdk/client.py    Python SDK
-  cli.py           agentguard check | serve | create-agent
-examples/          policy file, scripted demo, Claude-powered agent
-tests/             policy unit tests + end-to-end API tests
+```bash
+pip install -e ".[dev]"
+pytest -q                                   # SQLite
+AGENTGUARD_TEST_POSTGRES_URL=postgresql+psycopg://postgres@localhost/agentguard_test pytest -q   # + Postgres
+ruff check agentguard tests
 ```
 
-## Known limitations (MVP) and what's next
-
-These are deliberate MVP shortcuts. Fix them before a real customer depends on the gateway:
-
-- **Single process.** Audit sequencing uses an in-process lock. For multiple replicas, move to Postgres with an advisory lock (or a dedicated sequencer).
-- **Crash during execution** leaves a request in `executing`. Add a reconciler that checks the downstream system by idempotency key.
-- **Params are stored unencrypted** in the database (redaction applies to the audit log and API responses only). Add field-level encryption or a KMS envelope.
-- **One admin token, no SSO/RBAC** for reviewers, and reviewer identity is self-asserted. Add per-reviewer accounts (WorkOS/Auth0), per-rule approver groups, and a separation-of-duties check.
-- **Approvals are dashboard-only.** Slack/Teams approval cards are the most-requested next feature.
-- **No MCP front door yet.** An MCP server that exposes brokered actions as MCP tools would let any MCP-capable agent use AgentGuard with zero code.
-- **Secrets come from env vars.** Integrate a vault (AWS Secrets Manager, HashiCorp Vault) and per-agent OAuth on behalf of end users.
-- **Observability export.** Emit OpenTelemetry spans per action so traces show up in the tools customers already use (LangSmith, Langfuse, Datadog).
+The suite (146 test runs across SQLite and Postgres) covers tenant isolation, role enforcement, the two-person rule, concurrent approvals, audit-chain tamper and truncation detection, Slack signature verification, encryption at rest, SSRF guards, migrations and the MCP server, on both databases.

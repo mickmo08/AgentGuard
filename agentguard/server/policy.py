@@ -16,10 +16,11 @@ from __future__ import annotations
 
 import fnmatch
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
-from agentguard.server.config import DECISION_RANK, PolicyConfig, RateLimit, Rule
+from agentguard.server.config import DECISION_RANK, ApprovalSpec, PolicyConfig, RateLimit, Rule
 
 _MISSING = object()
 
@@ -31,6 +32,7 @@ class PolicyResult:
     rule_id: str | None = None
     matched_rules: list[str] = field(default_factory=list)
     rate_limit: RateLimit | None = None
+    approvals: ApprovalSpec | None = None  # set when decision == "review"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -39,7 +41,20 @@ class PolicyResult:
             "rule_id": self.rule_id,
             "matched_rules": self.matched_rules,
             "rate_limited": self.rate_limit is not None,
+            "approvals": self.approvals.model_dump() if self.approvals else None,
         }
+
+
+def combine_approvals(rules: list[Rule]) -> ApprovalSpec:
+    """Several matching review rules: the strictest requirement of each kind applies.
+    The highest `min` wins and only roles every rule allows may approve. If the rules
+    share no role, only owners may approve."""
+    min_needed = max(r.approvals.min for r in rules)
+    roles = set(rules[0].approvals.roles)
+    for r in rules[1:]:
+        roles &= set(r.approvals.roles)
+    ordered = [role for role in ("owner", "admin", "approver") if role in roles] or ["owner"]
+    return ApprovalSpec(min=min_needed, roles=ordered)
 
 
 def _glob_any(value: str, patterns: list[str]) -> bool:
@@ -154,11 +169,16 @@ class PolicyEngine:
             return PolicyResult(
                 decision=self.config.default,
                 reason=f"no rule matched; default is {self.config.default}",
+                approvals=ApprovalSpec() if self.config.default == "review" else None,
             )
         winner = max(matched, key=lambda r: DECISION_RANK[r.decision])
+        approvals = None
+        if winner.decision == "review":
+            approvals = combine_approvals([r for r in matched if r.decision == "review"])
         return PolicyResult(
             decision=winner.decision,
             reason=winner.reason or winner.description or f"matched rule {winner.id!r}",
             rule_id=winner.id,
             matched_rules=[r.id for r in matched],
+            approvals=approvals,
         )

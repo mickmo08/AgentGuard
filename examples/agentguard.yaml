@@ -1,35 +1,30 @@
-# AgentGuard policy-as-code for a customer-support agent.
+# Starter policy: every new organization begins here.
 #
-# Decision semantics: every matching rule is collected and the most
+# It wires up two demo connectors (an in-memory payments system and outbox)
+# so you can try the full flow before connecting real systems. Edit it under
+# Policies; each save creates a new version you can diff and roll back.
+#
+# How decisions work: every matching rule is collected and the most
 # restrictive decision wins (block > review > allow). If nothing matches,
 # `default` applies, so anything not explicitly allowed is blocked.
 
-approval_ttl_seconds: 86400       # pending approvals expire after 24h
-redact_params: [card_number, ssn] # masked in the audit log and API responses
+description: Customer-support agent guardrails (starter)
+approval_ttl_seconds: 86400
+redact_params: [card_number, ssn, password]
 
 connectors:
   payments:
-    type: mock_payments           # swap for an `http` connector pointing at your payments API
-    description: Payments provider (demo backend)
-    secret_env: PAYMENTS_API_KEY  # the gateway holds this; agents never see it
-
+    type: mock_payments
+    description: Demo payments backend. Replace with the stripe connector below.
   email:
     type: mock_email
-    description: Transactional email (demo backend)
+    description: Demo outbox
 
-  crm:
-    type: http
-    description: Internal CRM REST API
-    base_url: https://crm.internal.example.com/api
-    secret_env: CRM_TOKEN
-    actions:
-      add_note:
-        description: Attach a note to a customer record
-        method: POST
-        path: /customers/{customer_id}/notes
-        params:
-          customer_id: {type: string}
-          note: {type: string}
+  # Real Stripe refunds: store your restricted key under Secrets as
+  # `stripe_key`, uncomment this block, and point rules at stripe.refund.
+  # stripe:
+  #   type: stripe
+  #   secret: stripe_key
 
 policies:
   default: block
@@ -38,7 +33,7 @@ policies:
     - id: support-read
       description: Support agents may look up customers
       agents: ["support-*"]
-      actions: [payments.get_customer, crm.add_note]
+      action: payments.get_customer
       decision: allow
 
     - id: refund-small
@@ -49,7 +44,7 @@ policies:
       decision: allow
 
     - id: refund-medium
-      description: Refunds between $50 and $500 need a manager
+      description: Refunds between $50 and $500 need one approver
       agents: ["support-*"]
       action: payments.refund
       when: {amount: {gt: 50, lte: 500}}
@@ -57,18 +52,20 @@ policies:
       reason: Refunds over $50 require manager approval
 
     - id: refund-large
-      description: Large refunds are never automated
+      description: Refunds between $500 and $2,000 need two different admins
+      agents: ["support-*"]
       action: payments.refund
-      when: {amount: {gt: 500}}
-      decision: block
-      reason: Refunds over $500 must be handled by the finance team
-
-    - id: refund-non-usd
-      description: Only USD refunds are automated
-      action: payments.refund
-      when: {currency: {exists: true, ne: usd}}
+      when: {amount: {gt: 500, lte: 2000}}
       decision: review
-      reason: Non-USD refunds need a manager to check the exchange rate
+      reason: Refunds over $500 require two admins
+      approvals: {min: 2, roles: [owner, admin]}
+
+    - id: refund-huge
+      description: Nothing above $2,000 is ever automated
+      action: payments.refund
+      when: {amount: {gt: 2000}}
+      decision: block
+      reason: Refunds over $2,000 must be handled by the finance team
 
     - id: email-customers
       description: Support may send email to well-formed addresses
@@ -83,7 +80,7 @@ policies:
       action: payments.refund
       max: 5
       window_seconds: 60
-      pause_agent: true           # kill switch: auto-pause the agent and log an incident
+      pause_agent: true
 
     - id: email-burst
       action: email.send

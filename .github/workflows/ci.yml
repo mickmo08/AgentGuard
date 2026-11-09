@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agentguard_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    strategy:
+      matrix:
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check agentguard tests
+      - run: node --check agentguard/server/static/app.js
+      - run: agentguard check-policy examples/agentguard.yaml
+      - name: Tests (SQLite and Postgres)
+        env:
+          AGENTGUARD_TEST_POSTGRES_URL: postgresql+psycopg://postgres:postgres@localhost:5432/agentguard_test
+        run: pytest -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t agentguard:ci .
+      - name: Smoke test the image
+        run: |
+          docker run -d --name ag -p 8080:8080 -e AGENTGUARD_ENCRYPTION_KEYS="$(python3 -c 'import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())')" agentguard:ci
+          for i in $(seq 1 30); do curl -fs localhost:8080/readyz && break; sleep 1; done
+          curl -fs localhost:8080/healthz
+          docker logs ag
