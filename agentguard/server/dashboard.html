@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentGuard</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #16181d; --muted: #5d6573; --border: #e2e5ea;
+    --accent: #3b5bdb; --allow: #2b8a3e; --allow-bg: #e6f4ea; --review: #b45309; --review-bg: #fdf1dc;
+    --block: #c92a2a; --block-bg: #fde8e8; --neutral-bg: #eef0f3; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --panel: #171a21; --text: #e6e8ec; --muted: #9aa2b1; --border: #2a2f3a;
+      --accent: #7b93ff; --allow: #69db7c; --allow-bg: #16301e; --review: #fcc419; --review-bg: #33280d;
+      --block: #ff8787; --block-bg: #3a1717; --neutral-bg: #222733;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--panel); position: sticky; top: 0; z-index: 2; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .2px; }
+  header h1 span { color: var(--muted); font-weight: 400; }
+  nav { display: flex; gap: 4px; flex-wrap: wrap; }
+  nav button { background: none; border: 0; padding: 6px 10px; border-radius: 6px; color: var(--muted); cursor: pointer; font: inherit; }
+  nav button.active { background: var(--neutral-bg); color: var(--text); font-weight: 600; }
+  nav .badge { background: var(--review); color: #fff; border-radius: 9px; padding: 0 6px; font-size: 11px; margin-left: 4px; }
+  .grow { flex: 1; }
+  input, select, textarea { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+  textarea { font-family: var(--mono); font-size: 12px; width: 100%; min-height: 90px; }
+  button.btn { font: inherit; border: 1px solid var(--border); background: var(--panel); color: var(--text); border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  button.btn:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.approve { background: var(--allow); border-color: var(--allow); color: #fff; }
+  button.deny { color: var(--block); border-color: var(--block); }
+  main { max-width: 1200px; margin: 0 auto; padding: 20px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .tile { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .tile .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+  .tile .value { font-size: 26px; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 20px; overflow: hidden; }
+  .panel h2 { font-size: 14px; margin: 0; padding: 12px 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
+  .panel .body { padding: 16px; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; white-space: nowrap; }
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover td { background: var(--neutral-bg); }
+  code, .mono { font-family: var(--mono); font-size: 12px; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; font-weight: 500; white-space: nowrap; }
+  .allow, .executed, .active { background: var(--allow-bg); color: var(--allow); }
+  .review, .pending_approval { background: var(--review-bg); color: var(--review); }
+  .block, .blocked, .denied, .failed, .paused, .expired { background: var(--block-bg); color: var(--block); }
+  .executing { background: var(--neutral-bg); color: var(--muted); }
+  .muted { color: var(--muted); }
+  .nowrap { white-space: nowrap; }
+  .empty { color: var(--muted); padding: 24px; text-align: center; }
+  .cards { display: grid; gap: 12px; }
+  .card { border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; background: var(--panel); }
+  .card .top { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .card .action { font-weight: 600; font-family: var(--mono); }
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 10px 0; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-family: var(--mono); font-size: 12px; word-break: break-word; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .timeline { list-style: none; margin: 0; padding: 0; }
+  .timeline li { padding: 10px 0 10px 18px; border-left: 2px solid var(--border); margin-left: 6px; position: relative; }
+  .timeline li::before { content: ""; position: absolute; left: -6px; top: 15px; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); }
+  .timeline pre { margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .drawer { position: fixed; inset: 0 0 0 auto; width: min(560px, 100%); background: var(--panel); border-left: 1px solid var(--border); box-shadow: -8px 0 24px rgba(0,0,0,.15); padding: 20px; overflow-y: auto; transform: translateX(100%); transition: transform .2s; z-index: 5; }
+  .drawer.open { transform: none; }
+  .verify-ok { color: var(--allow); font-weight: 600; }
+  .verify-bad { color: var(--block); font-weight: 600; }
+  .login { max-width: 420px; margin: 80px auto; }
+  .hidden { display: none !important; }
+  #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 10; }
+  #toast.show { opacity: 1; }
+  @media (max-width: 640px) { main { padding: 16px; } header { padding: 10px 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>AgentGuard <span>action gateway</span></h1>
+  <nav id="nav" class="hidden">
+    <button data-view="overview" class="active">Overview</button>
+    <button data-view="approvals">Approvals <span id="badge" class="badge hidden"></span></button>
+    <button data-view="actions">Actions</button>
+    <button data-view="agents">Agents</button>
+    <button data-view="audit">Audit</button>
+    <button data-view="policies">Policies</button>
+  </nav>
+  <div class="grow"></div>
+  <div class="row hidden" id="who">
+    <label class="muted" for="reviewer">Reviewer</label>
+    <input id="reviewer" placeholder="your name" size="12">
+    <button class="btn" id="logout">Sign out</button>
+  </div>
+</header>
+
+<div id="login" class="login panel">
+  <h2>Sign in</h2>
+  <div class="body">
+    <p class="muted">Paste the admin token the gateway printed at startup (or <code>AGENTGUARD_ADMIN_TOKEN</code>).</p>
+    <div class="row"><input id="token" type="password" class="grow" placeholder="admin token"><button class="btn primary" id="signin">Sign in</button></div>
+    <p id="login-err" class="verify-bad hidden"></p>
+  </div>
+</div>
+
+<main id="app" class="hidden">
+  <section data-panel="overview">
+    <div class="tiles" id="tiles"></div>
+    <div class="panel"><h2>Waiting for approval</h2><div class="body" id="overview-approvals"></div></div>
+    <div class="panel"><h2>Recent actions</h2><div class="table-wrap" id="overview-actions"></div></div>
+  </section>
+
+  <section data-panel="approvals" class="hidden">
+    <div class="panel"><h2>Approval queue</h2><div class="body" id="approvals"></div></div>
+  </section>
+
+  <section data-panel="actions" class="hidden">
+    <div class="panel">
+      <h2>Actions
+        <span class="grow"></span>
+        <select id="f-status"><option value="">any status</option><option>executed</option><option>pending_approval</option><option>blocked</option><option>denied</option><option>failed</option><option>expired</option></select>
+        <select id="f-agent"><option value="">any agent</option></select>
+      </h2>
+      <div class="table-wrap" id="actions"></div>
+    </div>
+  </section>
+
+  <section data-panel="agents" class="hidden">
+    <div class="panel"><h2>Agents</h2><div class="table-wrap" id="agents"></div></div>
+    <div class="panel"><h2>Register an agent</h2><div class="body">
+      <div class="row">
+        <input id="new-id" placeholder="agent id (e.g. support-bot)">
+        <input id="new-name" placeholder="display name">
+        <input id="new-owner" placeholder="owner / team">
+        <button class="btn primary" id="create-agent">Create</button>
+      </div>
+      <p id="new-key" class="mono hidden"></p>
+    </div></div>
+  </section>
+
+  <section data-panel="audit" class="hidden">
+    <div class="panel"><h2>Integrity <span class="grow"></span><button class="btn" id="verify">Verify chain</button></h2>
+      <div class="body" id="verify-out"><span class="muted">Every event commits to the hash of the one before it. Editing or deleting any past event breaks verification.</span></div></div>
+    <div class="panel"><h2>Audit log</h2><div class="table-wrap" id="audit"></div></div>
+  </section>
+
+  <section data-panel="policies" class="hidden">
+    <div class="panel"><h2>Simulator</h2><div class="body">
+      <p class="muted">Dry-run a request against the live policy. Nothing executes and rate limits are not applied.</p>
+      <div class="row" style="margin-bottom:8px">
+        <input id="sim-agent" placeholder="agent id" value="support-bot">
+        <select id="sim-action"></select>
+        <button class="btn primary" id="simulate">Evaluate</button>
+      </div>
+      <textarea id="sim-params">{"customer_id": "cus_alice", "amount": 120}</textarea>
+      <div id="sim-out" style="margin-top:10px"></div>
+    </div></div>
+    <div class="panel"><h2>Rules <span class="muted" id="default-decision"></span></h2><div class="table-wrap" id="rules"></div></div>
+    <div class="panel"><h2>Rate limits</h2><div class="table-wrap" id="limits"></div></div>
+  </section>
+</main>
+
+<aside class="drawer" id="drawer"></aside>
+<div id="toast"></div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+    del(k) { try { localStorage.removeItem(k); } catch {} },
+  };
+  // All agent-supplied strings pass through esc() before reaching innerHTML.
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const pill = (v) => `<span class="pill ${esc(v)}">${esc(String(v).replace("_", " "))}</span>`;
+  const ago = (iso) => {
+    if (!iso) return "";
+    const s = Math.round((Date.now() - Date.parse(iso)) / 1000);
+    if (s < 60) return `${s}s ago`; if (s < 3600) return `${Math.round(s / 60)}m ago`;
+    if (s < 86400) return `${Math.round(s / 3600)}h ago`; return new Date(iso).toLocaleString();
+  };
+  const json = (v) => esc(JSON.stringify(v, null, 2));
+  const compact = (v) => esc(JSON.stringify(v));
+
+  let token = store.get("ag_token") || "";
+  let view = "overview";
+  let timer = null;
+
+  function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); setTimeout(() => t.classList.remove("show"), 2200); }
+
+  async function api(path, opts = {}) {
+    const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` } });
+    if (res.status === 401) { signOut(); throw new Error("unauthorized"); }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.detail || `HTTP ${res.status}`);
+    return body;
+  }
+
+  // ------------------------------------------------------------ rendering
+  function actionsTable(rows) {
+    if (!rows.length) return `<div class="empty">No actions yet.</div>`;
+    return `<table><thead><tr><th>When</th><th>Agent</th><th>Action</th><th>Params</th><th>Decision</th><th>Status</th><th>Rule</th></tr></thead><tbody>${
+      rows.map((r) => `<tr class="clickable" data-id="${esc(r.id)}"><td class="muted nowrap">${esc(ago(r.created_at))}</td><td class="nowrap">${esc(r.agent_id)}</td>
+        <td class="mono">${esc(r.action)}</td><td class="mono">${compact(r.params)}</td><td>${pill(r.decision)}</td><td>${pill(r.status)}</td>
+        <td class="mono muted">${esc(r.rule_id || "default")}</td></tr>`).join("")}</tbody></table>`;
+  }
+
+  function approvalCards(rows) {
+    if (!rows.length) return `<div class="empty">Nothing waiting. Agents are operating within policy.</div>`;
+    return `<div class="cards">${rows.map((r) => `
+      <div class="card">
+        <div class="top"><span class="action">${esc(r.action)}</span>${pill("review")}<span class="muted">by ${esc(r.agent_id)} · ${esc(ago(r.created_at))}</span></div>
+        <dl class="kv">
+          ${Object.entries(r.params).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${compact(v)}</dd>`).join("")}
+          <dt>why review</dt><dd>${esc(r.reason)}</dd>
+          ${Object.keys(r.context || {}).length ? `<dt>agent context</dt><dd>${compact(r.context)}</dd>` : ""}
+          ${r.run_id ? `<dt>run</dt><dd>${esc(r.run_id)}</dd>` : ""}
+          <dt>expires</dt><dd>${esc(new Date(r.expires_at).toLocaleString())}</dd>
+        </dl>
+        <div class="row">
+          <input class="grow" placeholder="note (optional)" data-note="${esc(r.id)}">
+          <button class="btn approve" data-approve="${esc(r.id)}">Approve &amp; execute</button>
+          <button class="btn deny" data-deny="${esc(r.id)}">Deny</button>
+          <button class="btn" data-id="${esc(r.id)}">Details</button>
+        </div>
+      </div>`).join("")}</div>`;
+  }
+
+  async function renderOverview() {
+    const [stats, pending, recent] = await Promise.all([api("/v1/admin/stats"), api("/v1/admin/approvals"), api("/v1/admin/actions?limit=10")]);
+    const by = stats.by_status;
+    const tiles = [
+      ["Actions · 24h", stats.actions],
+      ["Executed", by.executed || 0],
+      ["Pending approval", stats.pending_approvals],
+      ["Blocked", (by.blocked || 0) + (by.denied || 0)],
+      ["Failed", by.failed || 0],
+      ["Agents paused", `${stats.agents.paused} / ${stats.agents.total}`],
+    ];
+    $("tiles").innerHTML = tiles.map(([l, v]) => `<div class="tile"><div class="label">${esc(l)}</div><div class="value">${esc(v)}</div></div>`).join("");
+    $("overview-approvals").innerHTML = approvalCards(pending.slice(0, 3));
+    $("overview-actions").innerHTML = actionsTable(recent);
+    setBadge(pending.length);
+  }
+
+  async function renderApprovals() {
+    const pending = await api("/v1/admin/approvals");
+    if (!document.activeElement || !document.activeElement.dataset.note) $("approvals").innerHTML = approvalCards(pending);
+    setBadge(pending.length);
+  }
+
+  async function renderActions() {
+    const qs = new URLSearchParams({ limit: "200" });
+    if ($("f-status").value) qs.set("status", $("f-status").value);
+    if ($("f-agent").value) qs.set("agent_id", $("f-agent").value);
+    $("actions").innerHTML = actionsTable(await api(`/v1/admin/actions?${qs}`));
+  }
+
+  async function renderAgents() {
+    const agents = await api("/v1/admin/agents");
+    const sel = $("f-agent"), cur = sel.value;
+    sel.innerHTML = `<option value="">any agent</option>` + agents.map((a) => `<option ${a.id === cur ? "selected" : ""}>${esc(a.id)}</option>`).join("");
+    $("agents").innerHTML = !agents.length ? `<div class="empty">No agents registered.</div>` :
+      `<table><thead><tr><th>Agent</th><th>Owner</th><th>Status</th><th>Last 24h</th><th>Key</th><th></th></tr></thead><tbody>${agents.map((a) => `
+        <tr><td><b>${esc(a.name)}</b><div class="mono muted">${esc(a.id)}</div></td><td>${esc(a.owner) || '<span class="muted">-</span>'}</td>
+        <td>${pill(a.status)}${a.paused_reason ? `<div class="muted">${esc(a.paused_reason)}</div>` : ""}</td>
+        <td class="mono">${Object.entries(a.last_24h).map(([k, v]) => `${esc(k)}: ${esc(v)}`).join("<br>") || '<span class="muted">idle</span>'}</td>
+        <td class="mono muted">ag_${esc(a.key_prefix)}_…</td>
+        <td>${a.status === "active" ? `<button class="btn deny" data-pause="${esc(a.id)}">Pause</button>` : `<button class="btn" data-resume="${esc(a.id)}">Resume</button>`}</td></tr>`).join("")}</tbody></table>`;
+  }
+
+  async function renderAudit() {
+    const events = await api("/v1/admin/audit?limit=200");
+    $("audit").innerHTML = !events.length ? `<div class="empty">No events.</div>` :
+      `<table><thead><tr><th>#</th><th>When</th><th>Actor</th><th>Event</th><th>Request</th><th>Data</th><th>Hash</th></tr></thead><tbody>${events.map((e) => `
+        <tr ${e.request_id ? `class="clickable" data-id="${esc(e.request_id)}"` : ""}><td class="mono">${esc(e.seq)}</td><td class="muted">${esc(ago(e.ts))}</td><td>${esc(e.actor)}</td>
+        <td class="mono">${esc(e.event_type)}</td><td class="mono muted">${esc(e.request_id || "")}</td><td class="mono">${compact(e.data)}</td>
+        <td class="mono muted">${esc(e.hash.slice(0, 12))}…</td></tr>`).join("")}</tbody></table>`;
+  }
+
+  let policiesLoaded = false;
+  async function renderPolicies() {
+    if (policiesLoaded) return;
+    const p = await api("/v1/admin/policies");
+    $("sim-action").innerHTML = p.actions.map((a) => `<option ${a === "payments.refund" ? "selected" : ""}>${esc(a)}</option>`).join("");
+    $("default-decision").innerHTML = `· default ${pill(p.policies.default)} · most restrictive match wins`;
+    const cond = (w) => Object.entries(w).map(([k, ops]) => Object.entries(ops).map(([op, v]) => `${esc(k)} ${esc(op)} ${compact(v)}`).join(", ")).join("; ") || '<span class="muted">always</span>';
+    $("rules").innerHTML = `<table><thead><tr><th>Rule</th><th>Agents</th><th>Actions</th><th>When</th><th>Decision</th></tr></thead><tbody>${p.policies.rules.map((r) => `
+      <tr><td><b class="mono">${esc(r.id)}</b><div class="muted">${esc(r.description)}</div></td><td class="mono">${esc(r.agents.join(", "))}</td>
+      <td class="mono">${esc(r.actions.join(", "))}</td><td class="mono">${cond(r.when)}</td><td>${pill(r.decision)}</td></tr>`).join("")}</tbody></table>`;
+    $("limits").innerHTML = !p.policies.rate_limits.length ? `<div class="empty">None.</div>` : `<table><thead><tr><th>Limit</th><th>Agents</th><th>Actions</th><th>Max</th><th>On trip</th></tr></thead><tbody>${p.policies.rate_limits.map((r) => `
+      <tr><td><b class="mono">${esc(r.id)}</b><div class="muted">${esc(r.description)}</div></td><td class="mono">${esc(r.agents.join(", "))}</td><td class="mono">${esc(r.actions.join(", "))}</td>
+      <td>${esc(r.max)} / ${esc(r.window_seconds)}s</td><td>${r.pause_agent ? pill("block") + " + pause agent" : pill("block")}</td></tr>`).join("")}</tbody></table>`;
+    policiesLoaded = true;
+  }
+
+  async function openDrawer(id) {
+    const a = await api(`/v1/admin/actions/${encodeURIComponent(id)}`);
+    $("drawer").innerHTML = `
+      <div class="row"><b class="mono">${esc(a.action)}</b>${pill(a.status)}<span class="grow"></span><button class="btn" id="close-drawer">Close</button></div>
+      <dl class="kv">
+        <dt>request</dt><dd>${esc(a.id)}</dd><dt>agent</dt><dd>${esc(a.agent_id)}</dd>
+        <dt>decision</dt><dd>${esc(a.decision)} (${esc(a.rule_id || "default")})</dd><dt>reason</dt><dd>${esc(a.reason)}</dd>
+        ${a.reviewer ? `<dt>reviewer</dt><dd>${esc(a.reviewer)}${a.review_note ? ` · ${esc(a.review_note)}` : ""}</dd>` : ""}
+        ${a.run_id ? `<dt>run</dt><dd>${esc(a.run_id)}</dd>` : ""}
+        <dt>idempotency</dt><dd>${esc(a.idempotency_key)}</dd>
+        ${a.duration_ms != null ? `<dt>duration</dt><dd>${esc(a.duration_ms)} ms</dd>` : ""}
+      </dl>
+      <h3>Params</h3><pre class="mono">${json(a.params)}</pre>
+      ${Object.keys(a.context || {}).length ? `<h3>Agent context</h3><pre class="mono">${json(a.context)}</pre>` : ""}
+      ${a.result ? `<h3>Result</h3><pre class="mono">${json(a.result)}</pre>` : ""}
+      ${a.error ? `<h3>Error</h3><pre class="mono verify-bad">${esc(a.error)}</pre>` : ""}
+      <h3>Timeline</h3>
+      <ol class="timeline">${a.timeline.map((e) => `<li><b class="mono">${esc(e.event_type)}</b> <span class="muted">· ${esc(e.actor)} · ${esc(new Date(e.ts).toLocaleTimeString())}</span>
+        ${Object.keys(e.data).length ? `<pre>${json(e.data)}</pre>` : ""}</li>`).join("")}</ol>`;
+    $("drawer").classList.add("open");
+  }
+
+  function setBadge(n) { const b = $("badge"); b.textContent = n; b.classList.toggle("hidden", !n); }
+
+  const renderers = { overview: renderOverview, approvals: renderApprovals, actions: renderActions, agents: renderAgents, audit: renderAudit, policies: renderPolicies };
+  async function refresh() {
+    try {
+      if (view !== "agents") await renderAgents().catch(() => {});
+      await renderers[view]();
+    } catch (e) { if (e.message !== "unauthorized") toast(e.message); }
+  }
+
+  function show(v) {
+    view = v;
+    document.querySelectorAll("#nav button").forEach((b) => b.classList.toggle("active", b.dataset.view === v));
+    document.querySelectorAll("[data-panel]").forEach((p) => p.classList.toggle("hidden", p.dataset.panel !== v));
+    refresh();
+  }
+
+  // ------------------------------------------------------------ events
+  document.addEventListener("click", async (ev) => {
+    const t = ev.target.closest("button, tr.clickable");
+    if (!t) return;
+    try {
+      if (t.dataset.view) return show(t.dataset.view);
+      if (t.id === "close-drawer") return $("drawer").classList.remove("open");
+      if (t.dataset.approve || t.dataset.deny) {
+        const id = t.dataset.approve || t.dataset.deny;
+        const reviewer = $("reviewer").value.trim();
+        if (!reviewer) { $("reviewer").focus(); return toast("Enter your name as reviewer first"); }
+        const noteEl = document.querySelector(`[data-note="${CSS.escape(id)}"]`);
+        const r = await api(`/v1/admin/approvals/${encodeURIComponent(id)}/${t.dataset.approve ? "approve" : "deny"}`, { method: "POST", body: JSON.stringify({ reviewer, note: noteEl ? noteEl.value : "" }) });
+        toast(`${r.action}: ${r.status}`); document.activeElement.blur(); return refresh();
+      }
+      if (t.dataset.pause) {
+        const reason = prompt(`Pause ${t.dataset.pause}? Every action it attempts will be blocked.\nReason:`, "manual pause");
+        if (reason === null) return;
+        await api(`/v1/admin/agents/${encodeURIComponent(t.dataset.pause)}/pause`, { method: "POST", body: JSON.stringify({ reason }) });
+        toast("Agent paused"); return refresh();
+      }
+      if (t.dataset.resume) { await api(`/v1/admin/agents/${encodeURIComponent(t.dataset.resume)}/resume`, { method: "POST" }); toast("Agent resumed"); return refresh(); }
+      if (t.dataset.id) return openDrawer(t.dataset.id);
+    } catch (e) { if (e.message !== "unauthorized") toast(e.message); }
+  });
+
+  $("f-status").addEventListener("change", refresh);
+  $("f-agent").addEventListener("change", refresh);
+  $("reviewer").value = store.get("ag_reviewer") || "";
+  $("reviewer").addEventListener("change", () => store.set("ag_reviewer", $("reviewer").value.trim()));
+
+  $("verify").addEventListener("click", async () => {
+    const v = await api("/v1/admin/audit/verify");
+    $("verify-out").innerHTML = v.valid
+      ? `<span class="verify-ok">✓ Chain intact</span> · ${esc(v.events)} events · head <code>${esc(v.head.slice(0, 16))}…</code>`
+      : `<span class="verify-bad">✗ Chain broken at event #${esc(v.broken_at)}</span> · ${esc(v.problem)}`;
+  });
+
+  $("simulate").addEventListener("click", async () => {
+    let params;
+    try { params = JSON.parse($("sim-params").value || "{}"); } catch { return toast("Params must be valid JSON"); }
+    try {
+      const r = await api("/v1/admin/policies/simulate", { method: "POST", body: JSON.stringify({ agent_id: $("sim-agent").value.trim(), action: $("sim-action").value, params }) });
+      $("sim-out").innerHTML = r.valid
+        ? `${pill(r.decision)} <span class="mono">${esc(r.rule_id || "default")}</span> · ${esc(r.reason)}${r.matched_rules.length > 1 ? `<div class="muted">also matched: ${esc(r.matched_rules.filter((x) => x !== r.rule_id).join(", "))}</div>` : ""}`
+        : `<span class="verify-bad">Invalid request:</span> ${esc(r.errors.join("; "))}`;
+    } catch (e) { toast(e.message); }
+  });
+
+  $("create-agent").addEventListener("click", async () => {
+    try {
+      const r = await api("/v1/admin/agents", { method: "POST", body: JSON.stringify({ id: $("new-id").value.trim(), name: $("new-name").value.trim(), owner: $("new-owner").value.trim() }) });
+      const out = $("new-key"); out.classList.remove("hidden");
+      out.textContent = `API key for ${r.agent.id} (copy it now, it is not shown again): ${r.api_key}`;
+      ["new-id", "new-name", "new-owner"].forEach((i) => ($(i).value = ""));
+      refresh();
+    } catch (e) { toast(e.message); }
+  });
+
+  async function signIn(t) {
+    token = t;
+    try { await api("/v1/admin/stats"); } catch (e) { $("login-err").textContent = "That token was rejected."; $("login-err").classList.remove("hidden"); return; }
+    store.set("ag_token", token);
+    ["login"].forEach((i) => $(i).classList.add("hidden"));
+    ["app", "nav", "who"].forEach((i) => $(i).classList.remove("hidden"));
+    show(view);
+    clearInterval(timer); timer = setInterval(refresh, 3000);
+  }
+  function signOut() {
+    token = ""; store.del("ag_token"); clearInterval(timer);
+    $("login").classList.remove("hidden"); ["app", "nav", "who"].forEach((i) => $(i).classList.add("hidden"));
+  }
+  $("signin").addEventListener("click", () => signIn($("token").value.trim()));
+  $("token").addEventListener("keydown", (e) => { if (e.key === "Enter") signIn($("token").value.trim()); });
+  $("logout").addEventListener("click", signOut);
+  if (token) signIn(token);
+})();
+</script>
+</body>
+</html>

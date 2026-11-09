@@ -1,0 +1,91 @@
+# AgentGuard policy-as-code for a customer-support agent.
+#
+# Decision semantics: every matching rule is collected and the most
+# restrictive decision wins (block > review > allow). If nothing matches,
+# `default` applies, so anything not explicitly allowed is blocked.
+
+approval_ttl_seconds: 86400       # pending approvals expire after 24h
+redact_params: [card_number, ssn] # masked in the audit log and API responses
+
+connectors:
+  payments:
+    type: mock_payments           # swap for an `http` connector pointing at your payments API
+    description: Payments provider (demo backend)
+    secret_env: PAYMENTS_API_KEY  # the gateway holds this; agents never see it
+
+  email:
+    type: mock_email
+    description: Transactional email (demo backend)
+
+  crm:
+    type: http
+    description: Internal CRM REST API
+    base_url: https://crm.internal.example.com/api
+    secret_env: CRM_TOKEN
+    actions:
+      add_note:
+        description: Attach a note to a customer record
+        method: POST
+        path: /customers/{customer_id}/notes
+        params:
+          customer_id: {type: string}
+          note: {type: string}
+
+policies:
+  default: block
+
+  rules:
+    - id: support-read
+      description: Support agents may look up customers
+      agents: ["support-*"]
+      actions: [payments.get_customer, crm.add_note]
+      decision: allow
+
+    - id: refund-small
+      description: Small refunds go through automatically
+      agents: ["support-*"]
+      action: payments.refund
+      when: {amount: {gt: 0, lte: 50}}
+      decision: allow
+
+    - id: refund-medium
+      description: Refunds between $50 and $500 need a manager
+      agents: ["support-*"]
+      action: payments.refund
+      when: {amount: {gt: 50, lte: 500}}
+      decision: review
+      reason: Refunds over $50 require manager approval
+
+    - id: refund-large
+      description: Large refunds are never automated
+      action: payments.refund
+      when: {amount: {gt: 500}}
+      decision: block
+      reason: Refunds over $500 must be handled by the finance team
+
+    - id: refund-non-usd
+      description: Only USD refunds are automated
+      action: payments.refund
+      when: {currency: {exists: true, ne: usd}}
+      decision: review
+      reason: Non-USD refunds need a manager to check the exchange rate
+
+    - id: email-customers
+      description: Support may send email to well-formed addresses
+      agents: ["support-*"]
+      action: email.send
+      when: {to: {regex: "^[^@\\s]+@[^@\\s]+\\.[a-z]{2,}$"}}
+      decision: allow
+
+  rate_limits:
+    - id: refund-burst
+      description: Stop a looping agent before it drains the account
+      action: payments.refund
+      max: 5
+      window_seconds: 60
+      pause_agent: true           # kill switch: auto-pause the agent and log an incident
+
+    - id: email-burst
+      action: email.send
+      max: 20
+      window_seconds: 60
